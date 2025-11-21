@@ -10,7 +10,7 @@
 export const AFFILIATE_IDS = {
     // Amazon Associates (https://affiliate-program.amazon.com/)
     // This is the most critical one for a general product site.
-    amazon: 'silversage-20', 
+    amazon: 'silversage20-20', 
   
     // Walmart Affiliate Program (via Impact Radius)
     walmart: '1234567',

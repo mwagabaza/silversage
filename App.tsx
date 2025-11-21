@@ -1,10 +1,10 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Region, Category, Product, BuyingOption, LocalResource } from './types';
-import { getCuratedProducts, getBuyingOptions, getLocalResources } from './services/geminiService';
+import { getCuratedProducts, getBuyingOptions, getLocalResources, getFallbackProducts } from './services/geminiService';
 import ProductCard from './components/ProductCard';
 import MarketIntelligence from './components/MarketIntelligence';
-import { Search, Globe, ChevronDown, Sparkles, Menu, X, Gift, ExternalLink, Loader2, Info, ShieldCheck, Timer, HeartHandshake, Building2, Mail, CheckCircle, MapPin, Phone } from 'lucide-react';
+import { Search, Globe, ChevronDown, Sparkles, Menu, X, Gift, ExternalLink, Loader2, Info, ShieldCheck, Timer, HeartHandshake, Building2, Mail, CheckCircle, MapPin, Phone, Armchair, Brain, Smartphone, Home, HeartPulse, Star, Package, AlertCircle } from 'lucide-react';
 
 function App() {
   // State
@@ -13,6 +13,7 @@ function App() {
   const [activeCategory, setActiveCategory] = useState<Category | 'All'>('All');
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isFallback, setIsFallback] = useState(false); // Track if we are showing fallback data
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   
   // Modals
@@ -29,20 +30,44 @@ function App() {
   // Ref to track the latest search request ID to prevent race conditions
   const searchRequestId = useRef(0);
 
+  // Helper for icons
+  const getCategoryIcon = (category: string) => {
+    const c = category.toLowerCase();
+    if (c.includes('holiday') || c.includes('gift')) return Gift;
+    if (c.includes('mobility') || c.includes('access')) return Armchair;
+    if (c.includes('brain') || c.includes('memory') || c.includes('cognition')) return Brain;
+    if (c.includes('tech')) return Smartphone;
+    if (c.includes('home') || c.includes('living')) return Home;
+    if (c.includes('wellness') || c.includes('supplements')) return HeartPulse;
+    if (c.includes('luxury')) return Star;
+    return Package;
+  };
+
   // Core Search Logic
   const handleSearch = useCallback(async (queryOverride?: string) => {
     const requestId = ++searchRequestId.current;
+    
+    // 1. Show Fallback immediately so section isn't empty
+    const fallbacks = getFallbackProducts(activeCategory);
+    setProducts(fallbacks);
+    setIsFallback(true); // Initially assume fallback
+    
     setLoading(true);
 
     try {
-      const categoryFilter = activeCategory !== 'All' ? activeCategory : undefined;
       const term = queryOverride !== undefined ? queryOverride : searchQuery;
-      const actualQuery = term || (categoryFilter ? `best ${categoryFilter} products` : "best products for aging parents");
+      const actualQuery = term || (activeCategory !== 'All' && activeCategory !== Category.HOLIDAY ? `best ${activeCategory} products` : "best products for aging parents");
       
-      const results = await getCuratedProducts(actualQuery, region, categoryFilter);
+      const serviceCategory = activeCategory === 'All' ? undefined : activeCategory;
+
+      const results = await getCuratedProducts(actualQuery, region, serviceCategory);
       
       if (requestId === searchRequestId.current) {
-        setProducts(results);
+        if (results && results.length > 0) {
+            setProducts(results);
+            setIsFallback(false); // We found real results, so not fallback
+        }
+        // If results is empty, we stay on fallback products and isFallback remains true
         setLoading(false);
       }
     } catch (e) {
@@ -68,7 +93,7 @@ function App() {
          handleSearch(); 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCategory]); // Removed region dependency as it is now static/internal
+  }, [activeCategory]); 
 
   const handleFindPrice = async (product: Product) => {
       setSelectedProduct(product);
@@ -246,41 +271,39 @@ function App() {
           {/* --- Product Grid --- */}
           <section className="lg:col-span-8 order-1 lg:order-2">
             <div className="flex justify-between items-end mb-6">
-              <h2 className="text-2xl font-serif font-bold text-stone-900">
-                {activeCategory === 'All' ? 'Curated Recommendations' : activeCategory}
-              </h2>
+              <div className="flex flex-col gap-1">
+                  <h2 className="text-2xl font-serif font-bold text-stone-900 flex items-center gap-3">
+                    {activeCategory === 'All' ? 'Curated Recommendations' : activeCategory}
+                    {loading && (
+                        <span className="flex items-center gap-2 text-xs font-sans font-normal text-stone-500 bg-stone-100 px-2 py-1 rounded-full">
+                            <Loader2 size={12} className="animate-spin" /> Checking for updates...
+                        </span>
+                    )}
+                  </h2>
+                  {!loading && isFallback && searchQuery && (
+                      <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 px-3 py-2 rounded-lg border border-amber-100 max-w-fit">
+                          <AlertCircle size={14} />
+                          <span>We couldn't find exact matches for "{searchQuery}". Showing curated favorites instead.</span>
+                      </div>
+                  )}
+              </div>
             </div>
 
-            {loading ? (
-               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                 {[1, 2, 3, 4].map(i => (
-                   <div key={i} className="bg-white rounded-xl h-96 animate-pulse border border-stone-100">
-                      <div className="h-56 bg-stone-100 w-full"></div>
-                      <div className="p-5 space-y-3">
-                        <div className="h-6 bg-stone-100 w-3/4 rounded"></div>
-                        <div className="h-4 bg-stone-100 w-1/2 rounded"></div>
-                        <div className="h-16 bg-stone-100 w-full rounded"></div>
-                      </div>
-                   </div>
-                 ))}
-               </div>
+            <div className={`grid grid-cols-1 md:grid-cols-2 gap-6 transition-opacity duration-500 ${loading ? 'opacity-80' : 'opacity-100'}`}>
+            {products.length > 0 ? (
+                products.map((product, idx) => (
+                <ProductCard 
+                    key={product.id || idx} 
+                    product={product} 
+                    onFindPrice={handleFindPrice}
+                />
+                ))
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {products.length > 0 ? (
-                  products.map((product, idx) => (
-                    <ProductCard 
-                        key={product.id || idx} 
-                        product={product} 
-                        onFindPrice={handleFindPrice}
-                    />
-                  ))
-                ) : (
-                  <div className="col-span-full text-center py-20 bg-white rounded-2xl border border-stone-100 border-dashed">
-                    <p className="text-stone-400">No products found. Try a different search.</p>
-                  </div>
-                )}
-              </div>
+                <div className="col-span-full text-center py-20 bg-white rounded-2xl border border-stone-100 border-dashed">
+                <p className="text-stone-400">No products found. Try a different search.</p>
+                </div>
             )}
+            </div>
           </section>
         </div>
       </main>

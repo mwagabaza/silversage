@@ -38,7 +38,7 @@ export interface BuyingOption {
 export interface MarketInsight {
   title: string;
   description: string;
-  opportunityLevel: 'High' | 'Medium' | 'Niche';
+  type: 'Seasonal' | 'Trending' | 'Essential';
   tags: string[];
 }
 

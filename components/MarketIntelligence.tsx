@@ -1,7 +1,8 @@
+
 import React, { useEffect, useState } from 'react';
 import { MarketInsight, Region } from '../types';
-import { getBusinessInsights } from '../services/geminiService';
-import { TrendingUp, Lightbulb, Target, RefreshCw } from 'lucide-react';
+import { getCareInsights } from '../services/geminiService';
+import { Sparkles, RefreshCw } from 'lucide-react';
 
 interface Props {
   region: Region;
@@ -16,10 +17,10 @@ const MarketIntelligence: React.FC<Props> = ({ region }) => {
     setLoading(true);
     setError(null);
     try {
-      const data = await getBusinessInsights(region);
+      const data = await getCareInsights(region);
       setInsights(data);
     } catch (err) {
-      setError("Failed to load market intelligence.");
+      setError("Failed to load insights.");
     } finally {
       setLoading(false);
     }
@@ -33,7 +34,7 @@ const MarketIntelligence: React.FC<Props> = ({ region }) => {
   if (loading && insights.length === 0) {
     return (
       <div className="p-8 bg-stone-900 text-white rounded-2xl animate-pulse">
-        <div className="h-8 bg-stone-700 rounded w-1/3 mb-6"></div>
+        <div className="h-8 bg-stone-700 rounded w-2/3 mb-6"></div>
         <div className="space-y-4">
           <div className="h-24 bg-stone-800 rounded-xl"></div>
           <div className="h-24 bg-stone-800 rounded-xl"></div>
@@ -48,11 +49,11 @@ const MarketIntelligence: React.FC<Props> = ({ region }) => {
       <div className="flex justify-between items-center mb-6">
         <div>
           <h2 className="text-2xl font-serif text-white flex items-center gap-3">
-            <TrendingUp className="text-sage-400" />
-            Market Intelligence: {region}
+            <Sparkles className="text-yellow-400" size={24} />
+            Caregiver Pulse
           </h2>
           <p className="text-stone-400 text-sm mt-1">
-            AI-generated opportunities for the longevity economy.
+            Trending topics and seasonal care tips.
           </p>
         </div>
         <button 
@@ -60,7 +61,7 @@ const MarketIntelligence: React.FC<Props> = ({ region }) => {
           disabled={loading}
           className="p-2 hover:bg-stone-800 rounded-full transition-colors disabled:opacity-50"
         >
-          <RefreshCw size={20} className={loading ? "animate-spin" : ""} />
+          <RefreshCw size={18} className={`text-stone-500 ${loading ? "animate-spin" : ""}`} />
         </button>
       </div>
 
@@ -68,15 +69,15 @@ const MarketIntelligence: React.FC<Props> = ({ region }) => {
 
       <div className="grid grid-cols-1 gap-6">
         {insights.map((insight, idx) => (
-          <div key={idx} className="bg-stone-800/50 p-5 rounded-xl border border-stone-700/50 hover:border-sage-500/30 transition-colors">
+          <div key={idx} className="bg-stone-800/50 p-5 rounded-xl border border-stone-700/50 hover:border-sage-500/30 transition-colors group">
             <div className="flex justify-between items-start mb-2">
-              <h3 className="font-bold text-lg text-sage-100">{insight.title}</h3>
-              <span className={`text-xs px-2 py-1 rounded font-medium ${
-                insight.opportunityLevel === 'High' ? 'bg-green-900/40 text-green-300' :
-                insight.opportunityLevel === 'Medium' ? 'bg-yellow-900/40 text-yellow-300' :
-                'bg-blue-900/40 text-blue-300'
+              <h3 className="font-bold text-lg text-sage-100 group-hover:text-white transition-colors">{insight.title}</h3>
+              <span className={`text-[10px] uppercase tracking-wider px-2 py-1 rounded font-bold ${
+                insight.type === 'Essential' ? 'bg-red-900/40 text-red-200' :
+                insight.type === 'Seasonal' ? 'bg-green-900/40 text-green-200' :
+                'bg-blue-900/40 text-blue-200'
               }`}>
-                {insight.opportunityLevel} Priority
+                {insight.type}
               </span>
             </div>
             <p className="text-stone-300 text-sm leading-relaxed mb-3">
@@ -84,7 +85,7 @@ const MarketIntelligence: React.FC<Props> = ({ region }) => {
             </p>
             <div className="flex flex-wrap gap-2">
               {insight.tags.map((tag, tIdx) => (
-                <span key={tIdx} className="text-xs text-stone-500 bg-stone-900 px-2 py-1 rounded">
+                <span key={tIdx} className="text-xs text-stone-500 bg-stone-900 px-2 py-1 rounded border border-stone-800">
                   #{tag}
                 </span>
               ))}
