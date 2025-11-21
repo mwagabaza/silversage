@@ -1,3 +1,4 @@
+
 export enum Region {
   US = 'United States',
   EU = 'Europe',
@@ -39,4 +40,11 @@ export interface MarketInsight {
   description: string;
   opportunityLevel: 'High' | 'Medium' | 'Niche';
   tags: string[];
+}
+
+export interface LocalResource {
+  name: string;
+  description: string;
+  contactInfo: string; // Phone or Website
+  type: 'Government' | 'Non-Profit' | 'Support Group';
 }

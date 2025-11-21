@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { Region, Product, MarketInsight, BuyingOption } from '../types';
+import { Region, Product, MarketInsight, BuyingOption, LocalResource } from '../types';
 import { monetizeUrl, isPreferredPartner } from './affiliateConfig';
 
 // Helper to get API key from either Vite env (Netlify) or standard env
@@ -15,15 +15,61 @@ const getApiKey = () => {
 
 const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
-// Helper to strip markdown code blocks if present
-const cleanJsonOutput = (text: string): string => {
-  let cleaned = text.trim();
-  if (cleaned.startsWith('```json')) {
-    cleaned = cleaned.replace(/^```json/, '').replace(/```$/, '');
-  } else if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```/, '').replace(/```$/, '');
+// --- CACHING SYSTEM ---
+const CACHE_TTL = 1000 * 60 * 60; // 1 Hour Cache
+const generateCacheKey = (type: string, ...args: (string | undefined)[]) => {
+  return `silversage_v1_${type}_${args.map(a => a?.trim().toLowerCase() || 'nil').join('_')}`;
+};
+
+const getFromCache = <T>(key: string): T | null => {
+  try {
+    const item = sessionStorage.getItem(key);
+    if (!item) return null;
+    
+    const { timestamp, data } = JSON.parse(item);
+    if (Date.now() - timestamp > CACHE_TTL) {
+      sessionStorage.removeItem(key);
+      return null;
+    }
+    return data as T;
+  } catch (e) {
+    console.warn('Cache retrieval failed', e);
+    return null;
   }
-  return cleaned;
+};
+
+const setCache = (key: string, data: any) => {
+  try {
+    sessionStorage.setItem(key, JSON.stringify({
+      timestamp: Date.now(),
+      data
+    }));
+  } catch (e) {
+    console.warn('Cache storage failed (quota exceeded?)', e);
+  }
+};
+// ----------------------
+
+// Helper to extract JSON array from text that might contain markdown or other text
+const cleanJsonOutput = (text: string): string => {
+  try {
+    const start = text.indexOf('[');
+    const end = text.lastIndexOf(']');
+    
+    if (start !== -1 && end !== -1 && end > start) {
+      return text.substring(start, end + 1);
+    }
+    
+    let cleaned = text.trim();
+    if (cleaned.startsWith('```json')) {
+      cleaned = cleaned.replace(/^```json/, '').replace(/```$/, '');
+    } else if (cleaned.startsWith('```')) {
+      cleaned = cleaned.replace(/^```/, '').replace(/```$/, '');
+    }
+    return cleaned;
+  } catch (e) {
+    return text;
+  }
 };
 
 export const getCuratedProducts = async (
@@ -32,60 +78,71 @@ export const getCuratedProducts = async (
   category?: string
 ): Promise<Product[]> => {
   
-  const isHolidayContext = category?.includes('Holiday') || query.toLowerCase().includes('black friday') || query.toLowerCase().includes('gift');
+  const cacheKey = generateCacheKey('products', query, region, category);
+  const cachedData = getFromCache<Product[]>(cacheKey);
+  if (cachedData) {
+    console.log("🚀 Serving products from cache");
+    return cachedData;
+  }
 
+  // NOTE: We use Google Search Grounding.
+  // RULE: When using tools: [{ googleSearch: {} }], we CANNOT use responseSchema or responseMimeType.
   const prompt = `
     You are a high-end curator for "SilverSage".
     The user is looking for: "${query}" ${category ? `in the category of ${category}` : ''}.
     
-    CRITICAL INSTRUCTION: You must list REAL, EXISTING products from established brands available in ${region}. 
-    Do not invent fictional product names (e.g., do not make up "SilverWalk 3000"). 
-    Use brands like Stander, Able Life, Bose, GrandPad, Levedao, Honda, etc., depending on the region.
+    Step 1: Use Google Search to find 6 SPECIFIC, REAL, HIGH-RATED products available right now in ${region}.
+    Step 2: Return the results strictly as a JSON Array.
+    
+    Constraints:
+    - Do NOT invent names. Use real brands (e.g., Stander, Able Life, Bose, Lively, etc.).
+    - Prices must be current estimates in ${region}.
+    - Focus on "Aging in Place" with dignity. No "medical" looking beige equipment unless necessary.
+    - If Holiday/Black Friday: Focus on deals or giftable packaging.
 
-    Find 6 distinct, high-quality products.
-    Focus on:
-    1. Design aesthetics (must not look medical).
-    2. Premium quality and durability.
-    ${isHolidayContext ? `3. "Gift-ability" and Holiday Appeal. Look for items that are popular specifically for Black Friday or make excellent gifts for aging parents.` : ''}
+    Output Requirements:
+    - Return ONLY valid JSON. No markdown code blocks, no introduction text.
+    - The JSON must be an array of objects with these exact keys:
+      "id", "name", "brand", "description", "price", "currency", "category", "reasoning"
 
-    Price: Estimate real market price in ${region} currency.
+    Example Object Structure:
+    {
+      "id": "1",
+      "name": "Product Name",
+      "brand": "Brand",
+      "description": "Visual description for image generation",
+      "price": "100.00",
+      "currency": "USD",
+      "category": "Category",
+      "reasoning": "Why this is a good choice"
+    }
   `;
-
-  const productSchema: Schema = {
-    type: Type.ARRAY,
-    items: {
-      type: Type.OBJECT,
-      properties: {
-        id: { type: Type.STRING },
-        name: { type: Type.STRING, description: "Specific model name" },
-        brand: { type: Type.STRING, description: "Real brand name" },
-        description: { type: Type.STRING },
-        price: { type: Type.STRING },
-        currency: { type: Type.STRING },
-        category: { type: Type.STRING },
-        reasoning: { type: Type.STRING, description: isHolidayContext ? "Why this makes a great gift or deal." : "Why this fits the SilverSage aesthetic." },
-      },
-      required: ["id", "name", "brand", "description", "price", "currency", "category", "reasoning"],
-    },
-  };
 
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: prompt,
       config: {
-        responseMimeType: "application/json",
-        responseSchema: productSchema,
-        temperature: 0.3, // Lower temperature for more factual accuracy
+        tools: [{ googleSearch: {} }],
       }
     });
 
     if (response.text) {
-      const parsed = JSON.parse(cleanJsonOutput(response.text));
-      return parsed.map((p: Product, index: number) => ({
-        ...p,
-        imageUrl: `https://picsum.photos/seed/${encodeURIComponent(p.name)}/400/400` // Better seed based on name
-      }));
+      const cleaned = cleanJsonOutput(response.text);
+      const parsed = JSON.parse(cleaned);
+      
+      const enrichedProducts = parsed.map((p: Product) => {
+        const imagePrompt = `professional product photography of ${p.brand} ${p.name}, ${p.category}, white background, studio lighting, high quality, minimal, commercial catalogue style`;
+        const encodedPrompt = encodeURIComponent(imagePrompt);
+        
+        return {
+          ...p,
+          imageUrl: `https://image.pollinations.ai/prompt/${encodedPrompt}?width=400&height=400&nologo=true&seed=${Math.floor(Math.random() * 9999)}`
+        };
+      });
+
+      setCache(cacheKey, enrichedProducts);
+      return enrichedProducts;
     }
     return [];
   } catch (error) {
@@ -95,11 +152,13 @@ export const getCuratedProducts = async (
 };
 
 export const getBuyingOptions = async (productName: string, region: Region): Promise<BuyingOption[]> => {
-  // We explicitly ask for Amazon or major retailer links to maximize affiliate potential
+  const cacheKey = generateCacheKey('buying_options', productName, region);
+  const cachedData = getFromCache<BuyingOption[]>(cacheKey);
+  if (cachedData) return cachedData;
+
   const prompt = `Find purchase pages for "${productName}" in ${region}. Prioritize major retailers like Amazon, Walmart, or direct manufacturer sites.`;
   
   try {
-    // Using Google Search Grounding to get real links
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: prompt,
@@ -115,7 +174,6 @@ export const getBuyingOptions = async (productName: string, region: Region): Pro
       chunks.forEach((chunk) => {
         if (chunk.web?.uri && chunk.web?.title) {
           const rawUrl = chunk.web.uri;
-          // HERE IS THE MAGIC: We convert the raw Google link into a Money Link
           const monetized = monetizeUrl(rawUrl);
           
           options.push({
@@ -127,12 +185,14 @@ export const getBuyingOptions = async (productName: string, region: Region): Pro
       });
     }
 
-    // Sort options to put preferred partners (Amazon/Walmart) at the top
-    return options.sort((a, b) => {
+    const sortedOptions = options.sort((a, b) => {
       const aPref = isPreferredPartner(a.url);
       const bPref = isPreferredPartner(b.url);
       return (aPref === bPref) ? 0 : aPref ? -1 : 1;
     }).slice(0, 4);
+
+    setCache(cacheKey, sortedOptions);
+    return sortedOptions;
     
   } catch (error) {
     console.error("Error searching for buy links:", error);
@@ -141,6 +201,10 @@ export const getBuyingOptions = async (productName: string, region: Region): Pro
 };
 
 export const getBusinessInsights = async (region: Region): Promise<MarketInsight[]> => {
+  const cacheKey = generateCacheKey('insights', region);
+  const cachedData = getFromCache<MarketInsight[]>(cacheKey);
+  if (cachedData) return cachedData;
+
   const prompt = `
     Act as a strategy consultant for the "Longevity Economy" in ${region}.
     Generate 3 specific, lucrative product niches for aging adults that are trending RIGHT NOW for the upcoming Holiday Season.
@@ -162,7 +226,7 @@ export const getBusinessInsights = async (region: Region): Promise<MarketInsight
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash', // Switched to Flash for speed
+      model: 'gemini-2.5-flash',
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -171,11 +235,65 @@ export const getBusinessInsights = async (region: Region): Promise<MarketInsight
     });
 
     if (response.text) {
-      return JSON.parse(cleanJsonOutput(response.text));
+      const data = JSON.parse(cleanJsonOutput(response.text));
+      setCache(cacheKey, data);
+      return data;
     }
     return [];
   } catch (error) {
     console.error("Error fetching insights:", error);
     return [];
   }
+};
+
+export const getLocalResources = async (issue: string, zipCode: string): Promise<LocalResource[]> => {
+    // Cache key includes issue and zip to prevent mixing locations
+    const cacheKey = generateCacheKey('local_resources', issue, zipCode);
+    const cachedData = getFromCache<LocalResource[]>(cacheKey);
+    if (cachedData) return cachedData;
+
+    const prompt = `
+        Act as a social worker helping a family.
+        Find 4 specific local resources, non-profits, government agencies, or support groups for "${issue}" serving the zip code area: ${zipCode} (and surrounding county).
+        
+        Prioritize:
+        1. Government Area Agencies on Aging.
+        2. Non-profit specialized associations (e.g., local Alzheimer's chapter).
+        3. Free or subsidized community transport/meals.
+
+        Return the results as a strict JSON Array.
+        Do NOT include markdown.
+        
+        Schema:
+        [
+            {
+                "name": "Name of Organization",
+                "description": "Brief description of services offered",
+                "contactInfo": "Phone number or website URL",
+                "type": "Government" | "Non-Profit" | "Support Group"
+            }
+        ]
+    `;
+
+    try {
+        // Using 2.5 Flash with Search to find real local phone numbers/sites
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: {
+                tools: [{ googleSearch: {} }]
+            }
+        });
+
+        if (response.text) {
+            const cleaned = cleanJsonOutput(response.text);
+            const parsed = JSON.parse(cleaned);
+            setCache(cacheKey, parsed);
+            return parsed;
+        }
+        return [];
+    } catch (error) {
+        console.error("Error fetching local resources:", error);
+        return [];
+    }
 };
